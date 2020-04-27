@@ -7,6 +7,7 @@ from torch import optim
 import numpy as np
 import time
 from livelossplot import PlotLosses
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import random
 from transformers import AlbertModel, AlbertTokenizer, AdamW, get_linear_schedule_with_warmup
@@ -41,9 +42,10 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
     torch.cuda.manual_seed_all(seed_val)
     best = (np.inf, -1, -np.inf, None, None)
 
-    liveloss = PlotLosses()
-    LossHistory = []
-#     accumulation_steps = 128
+    # liveloss = PlotLosses()
+    # LossHistory = []
+    writer = SummaryWriter()
+
     for epoch_i in range(0, epochs):
         print("")
         print('======== Epoch {:} / {:} ========'.format(epoch_i + 1, epochs))
@@ -66,6 +68,7 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
 
             if torch.cuda.device_count() > 1:
                 loss = loss.sum()
+
             loss.backward()
             if (step + 1) % accumulation_steps == 0:
                 torch.nn.utils.clip_grad_norm_(classifier.parameters(), 1.0)
@@ -77,60 +80,65 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
             epoch_loss += loss.cpu().item()
             
             if (step % 1000 == 0):
+                b_accuracy = flat_accuracy(logits, b_labels)
                 print("Step %i with loss %f elapsed time %f" % (step, batch_loss, time.time() - start))
+                writer.add_scalar("Loss/train", batch_loss, step)
+                writer.add_scalar("Accuracy/train", b_accuracy)
 
-        print('Evaluating...')
-        classifier.eval()
-        dev_loss = 0.
-        total_eval_accuracy = 0.
-        y_preds = None
-        y_true = None
-        for batch in validation_dataloader:
-            b_inputs_c = batch[0].to(device)
-            b_inputs_r = batch[1].to(device)
-            b_mask_c = batch[2].to(device)
-            b_mask_r = batch[3].to(device)
-            b_labels = batch[4].to(device)
+            print('Evaluating...')
+            classifier.eval()
+            dev_loss = 0.
+            total_eval_accuracy = 0.
+            y_preds = None
+            y_true = None
+            for batch in validation_dataloader:
+                b_inputs_c = batch[0].to(device)
+                b_inputs_r = batch[1].to(device)
+                b_mask_c = batch[2].to(device)
+                b_mask_r = batch[3].to(device)
+                b_labels = batch[4].to(device)
+                
+                with torch.no_grad():
+                    x_c = embedder(input_ids=b_inputs_c, attention_mask=b_mask_c)[0]
+                    x_r = embedder(input_ids=b_inputs_r, attention_mask=b_mask_r)[0]
+                    loss, logits = classifier(x_c.permute(1,0,2), x_r.permute(1,0,2), b_labels)
+                    if torch.cuda.device_count() > 1:
+                        loss = loss.sum()
+                        
+                dev_loss += loss.cpu().item()
+                label_ids = b_labels.cpu().numpy()
+                logits = logits.detach().cpu().numpy()
+                total_eval_accuracy += flat_accuracy(logits, label_ids)           
+                if y_preds is None:
+                    y_preds = np.argmax(logits, axis=1)
+                    y_true = label_ids
+                else:
+                    y_preds = np.concatenate((y_preds, np.argmax(logits, axis=1)))
+                    y_true = np.concatenate((y_true, label_ids))
             
-            with torch.no_grad():
-                x_c = embedder(input_ids=b_inputs_c, attention_mask=b_mask_c)[0]
-                x_r = embedder(input_ids=b_inputs_r, attention_mask=b_mask_r)[0]
-                loss, logits = classifier(x_c.permute(1,0,2), x_r.permute(1,0,2), b_labels)
-                if torch.cuda.device_count() > 1:
-                    loss = loss.sum()
-                    
-            dev_loss += loss.cpu().item()
-            label_ids = b_labels.cpu().numpy()
-            logits = logits.detach().cpu().numpy()
-            total_eval_accuracy += flat_accuracy(logits, label_ids)           
-            if y_preds is None:
-                y_preds = np.argmax(logits, axis=1)
-                y_true = label_ids
-            else:
-                y_preds = np.concatenate((y_preds, np.argmax(logits, axis=1)))
-                y_true = np.concatenate((y_true, label_ids))
-        
-        avg_val_accuracy = total_eval_accuracy / len(validation_dataloader)  
-        f1_score_1 = precision_recall_fscore_support(y_true, y_preds, average="binary")
-        f1_score_0 = precision_recall_fscore_support(y_true, y_preds, average="binary", pos_label=0)
+            avg_val_accuracy = total_eval_accuracy / len(validation_dataloader)
+            writer.add_scalar('Loss/test', dev_loss, step)
+            writer.add_scalar('Accuracy/test', avg_val_accuracy, n_iter)  
+            f1_score_1 = precision_recall_fscore_support(y_true, y_preds, average="binary")
+            f1_score_0 = precision_recall_fscore_support(y_true, y_preds, average="binary", pos_label=0)
 
-        print("Epoch %i with dev loss %f and dev accuracy %f" % (epoch_i, dev_loss, avg_val_accuracy))
-        logs["dev:loss"] = dev_loss
-        logs["train:loss"] = epoch_loss
-        liveloss.update(logs)
-        LossHistory.append(logs["train:loss"])
-        liveloss.send()
+            print("Epoch %i with dev loss %f and dev accuracy %f" % (epoch_i, dev_loss, avg_val_accuracy))
+            # logs["dev:loss"] = dev_loss
+            # logs["train:loss"] = epoch_loss
+            # liveloss.update(logs)
+            # LossHistory.append(logs["train:loss"])
+            # liveloss.send()
 
-        if(epoch_i-best[1] >= early_stop and best[0] < dev_loss):
-            print("early_stopping, epoch:", epoch_i+1)
-            break
-        elif(best[0] > dev_loss):
-            best = (dev_loss, epoch_i, avg_val_accuracy, f1_score_1, f1_score_0)
-            torch.save(classifier.state_dict(), 'checkpoint_big.pt')
+            if(epoch_i-best[1] >= early_stop and best[0] < dev_loss):
+                print("early_stopping, epoch:", epoch_i+1)
+                break
+            elif(best[0] > dev_loss):
+                best = (dev_loss, epoch_i, avg_val_accuracy, f1_score_1, f1_score_0)
+                torch.save(classifier.state_dict(), 'checkpoint_big.pt')
         
     print("Final dev loss %f Final Train Loss %f Final dev accuracy %f" % (dev_loss, epoch_loss, avg_val_accuracy))
     print("Best dev loss %f Best dev accuracy %f" % (best[0], best[2]))
     print("F1_score Sarcasm ", f1_score_1)
     print("F1_score Non-Sarcasm ", f1_score_0)
     
-    return classifier, LossHistory
+    return classifier
