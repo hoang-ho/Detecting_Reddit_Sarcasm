@@ -6,6 +6,7 @@ import pandas as pd
 
 
 def get_dataloader_ALBERT(tokenizer, data_file, batch_size, max_len, portion=0.75):
+    torch.manual_seed(0)
     labels = []
     sentences = []
     print("loading data ...")
@@ -48,7 +49,8 @@ def get_dataloader_ALBERT(tokenizer, data_file, batch_size, max_len, portion=0.7
     
     return train_dataloader, validation_dataloader
 
-def get_dataloader_LSTM(tokenizer, data_file, batch_size, max_len, portion=0.75):
+def get_dataloader_LSTM(tokenizer, data_file, batch_size, max_len, fraction=1, portion=0.75):
+    torch.manual_seed(0)
     labels = []
     parent = []
     reply = []
@@ -65,14 +67,16 @@ def get_dataloader_LSTM(tokenizer, data_file, batch_size, max_len, portion=0.75)
     p_attention_mask = []
     r_input_ids = []
     r_attention_mask = []
+    labels = labels[:int(fraction * len(labels))]
+    assert len(parent) == len(reply)
     print("Encoding sentences ...")
-    for sent in tqdm(parent):
+    for sent in tqdm(parent[:int(fraction * len(parent))]):
         input_ = tokenizer.encode_plus(sent, max_length=max_len, pad_to_max_length=True, 
                                         return_attention_mask=True, return_tensors = 'pt')
         p_input_ids.append(input_["input_ids"])
         p_attention_mask.append(input_["attention_mask"])
     
-    for sent in tqdm(reply):
+    for sent in tqdm(reply[:int(fraction * len(reply))]):
         input_ = tokenizer.encode_plus(sent, max_length=max_len, pad_to_max_length=True, 
                                         return_attention_mask=True, return_tensors = 'pt')
         r_input_ids.append(input_["input_ids"])

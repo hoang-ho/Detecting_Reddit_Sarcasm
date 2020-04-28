@@ -16,7 +16,7 @@ class AttnLSTM(nn.Module):
     def forward(self, x, return_att=False):
         # x : n, B, d
         lstm_out, _ = self.lstm(x)   # n, B, 2h
-        attn = F.tanh(self.attnLinear(lstm_out))  # n, B, h
+        attn = torch.tanh(self.attnLinear(lstm_out))  # n, B, h
         score = F.softmax(self.context(attn), dim=0)  # n, B, 1
         lstm_out = lstm_out.permute(1, 2, 0)  # B, 2h, n
         score = score.permute(1, 0, 2)  # B, n, 1
