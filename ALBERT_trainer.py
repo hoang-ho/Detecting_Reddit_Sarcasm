@@ -25,7 +25,7 @@ def flat_accuracy(preds, labels):
     labels_flat = labels.flatten()
     return np.sum(pred_flat == labels_flat) / len(labels_flat)
 
-def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataloader, validation_dataloader, seed_val=0, accumulation_steps=1):
+def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataloader, validation_dataloader, save_file, seed_val=0, accumulation_steps=1):
     if torch.cuda.device_count() > 1:
         print("Let's use", torch.cuda.device_count(), "GPUs!")
         classifier = nn.DataParallel(classifier)
@@ -39,7 +39,6 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
 
     liveloss = PlotLosses()
     LossHistory = []
-#     accumulation_steps = 128
     for epoch_i in range(0, epochs):
         print("")
         print('======== Epoch {:} / {:} ========'.format(epoch_i + 1, epochs))
@@ -105,10 +104,11 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
         f1_score_0 = precision_recall_fscore_support(y_true, y_preds, average="binary", pos_label=0)
 
         print("Epoch %i with dev loss %f and dev accuracy %f" % (epoch_i, dev_loss, avg_val_accuracy))
-        logs["dev:loss"] = dev_loss
-        logs["train:loss"] = epoch_loss
+        logs["val_loss"] = dev_loss / len(validation_dataloader)
+        logs["loss"] = epoch_loss / len(train_dataloader)
+        logs["val_accuracy"] = avg_val_accuracy
         liveloss.update(logs)
-        LossHistory.append(logs["train:loss"])
+        LossHistory.append(logs["loss"])
         liveloss.send()
 
         if(epoch_i-best[1] >= early_stop and best[0] < dev_loss):

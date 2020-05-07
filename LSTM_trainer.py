@@ -80,11 +80,10 @@ def trainer(classifier, optimizer, scheduler, epochs, early_stop, train_dataload
             epoch_loss += loss.cpu().item()
 
             if (step % 100) == 0:
-                print("Step %i with loss %.3f elapsed time %.3f" % (step, batch_loss, time.time() - start))
+                print("Step %i with loss %.3f elapsed time %.3f" % (step, epoch_loss/(step+1), time.time() - start))
                 # writer.add_scalar("Loss/train", epoch_loss/(step+1), global_step)
                 # writer.flush()
             
-        print("Step %i with loss %f elapsed time %f" % (step, batch_loss, time.time() - start))
         print('Evaluating...')
         classifier.eval()
         dev_loss = 0.
