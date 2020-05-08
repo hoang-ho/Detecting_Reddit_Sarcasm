@@ -34,6 +34,8 @@ class AttnLSTM(nn.Module):
             
             if return_att:
                 return a, score, (h_n, c_n)
+            
+            return a, (h_n, c_n)
         else:
             return lstm_out, (h_n, c_n)
 
@@ -73,26 +75,31 @@ class ConditionalAttn(nn.Module):
         self.hidden2label = nn.Linear(hidden_dim*2, label_size)
         self.loss_function = nn.CrossEntropyLoss()
     
-    def forward(self, x_c, x_r, y_true, return_att=False):
+    def forward(self, x_c, x_r, y_true=None, return_att=False):
         v_c, (h_cn, c_cn) = self.LSTM_c(x_c, attn=False) # (n, B, 2h)
 
         if return_att:
-            v_r, attn_score, _ = self.LSTM_r(x_r, c_cn, attn=True) # (B, 2h) (B, n, 1)
+            v_r, attn_score, _ = self.LSTM_r(x_r, c_cn, return_att=True) # (B, 2h) (B, n, 1)
         else:
-            v_r, _ = self.LSTM_r(x_r, c_cn, attn=False)
+            v_r, _ = self.LSTM_r(x_r, c_cn)
 
         ### Attention ###
         L = v_c.size(0)
         attn_vr = v_r.unsqueeze(0).repeat(L, 1, 1) # n, B, 2h
-        attn = torch.tanh(self.attnLinear_c(v_c) + self.attnLinear_r(attn_vr)) # n, B, h
+        attn = torch.tanh(self.attnLinear_c(v_c) + self.attnLinear_r(attn_vr)) # n, B, 2h
         score = F.softmax(self.context(attn), dim=0) #n, B, 1
         new_vc = torch.matmul(v_c.permute(1,2,0), score.permute(1,0,2)) # (B, 2h, n) x (B, n, 1) -> (B, 2h, 1)
         new_vc = new_vc.squeeze(-1) # (B, 2h)
         v = torch.tanh(self.proj_c(new_vc) + self.proj_r(v_r)) # B, 2h
         logits = self.hidden2label(v)
-        loss = self.loss_function(logits, y_true)
 
+        if y_true != None:
+            loss = self.loss_function(logits, y_true)
+            if return_att:
+                return loss, logits, attn_score, score
+            return loss, logits
+        
         if return_att:
-            return attn_score, score
+            return logits, attn_score, score 
 
-        return loss, logits
+        return logits
